@@ -114,18 +114,7 @@ void MqttClient::disconnect() {
 }
 
 bool MqttClient::isConnected() const {
-    if (!mosq_) {
-        return false;
-    }
-    
-    // 检查 socket 是否有效
-    int sock = mosquitto_socket(mosq_);
-    if (sock < 0) {
-        return false;
-    }
-    
-    // 检查连接状态
-    return connected_ && mosquitto_connect(mosq_, broker_.c_str(), port_, 60) == MOSQ_ERR_SUCCESS;
+    return connected_;
 }
 
 void MqttClient::processMessages(int timeout_ms) {

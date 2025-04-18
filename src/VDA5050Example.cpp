@@ -31,6 +31,9 @@ void showStatus(deviceagv::VDA5050Agv& vda5050) {
     for(auto node : vda5050.restPathInt()) {
         std::cout << node << " ";
     }
+    if(vda5050.errMsg() != ""){
+        std::cout << vda5050.errMsg() << " ";
+    }
     std::cout << std::endl;
     std::cout << "==================\n" << std::endl;
 }
@@ -76,7 +79,7 @@ int main() {
             // port = 1883;
             // serialNumber = "312532";
             // version = "v2.0.0";
-            broker = "192.168.60.179";
+            broker = "127.0.0.1";
             manufacturer = "HikRobot";
             port = 1883;
             serialNumber = "1";

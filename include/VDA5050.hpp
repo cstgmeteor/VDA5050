@@ -39,9 +39,6 @@ namespace deviceagv {
         struct Imp;
         std::unique_ptr<Imp> imp_;
 
-        // 连接状态处理
-        void handleConnectionState(const vda5050::ConnectionState& state);
-
         // 连接监控相关
         void startConnectionMonitor();
         void stopConnectionMonitor();
