@@ -84,6 +84,10 @@ struct VDA5050Agv::Imp {
     std::condition_variable monitor_cv_;
     const std::chrono::seconds MONITOR_INTERVAL{5};  // 监控间隔5秒
     const int MAX_RECONNECT_ATTEMPTS{3};  // 最大重连次数
+
+    // 全局监控相关
+    static std::mutex global_monitor_mutex;
+    static bool global_monitoring;
 };
     // 初始化静态成员
     int VDA5050Agv::Imp::connect_num = 0;
@@ -92,6 +96,8 @@ struct VDA5050Agv::Imp {
     std::string VDA5050Agv::Imp::orderId_ = "1";
     std::string VDA5050Agv::Imp::actionId_= "1";
     bool VDA5050Agv::Imp::is_connected_ = false;  // 添加静态成员变量跟踪连接状态
+    std::mutex VDA5050Agv::Imp::global_monitor_mutex;
+    bool VDA5050Agv::Imp::global_monitoring = false;
 
     VDA5050Agv::VDA5050Agv(const std::string& broker, int port,
         const std::string& manufacturer,
@@ -859,35 +865,52 @@ struct VDA5050Agv::Imp {
 
     // 添加监控线程的启动和停止函数
     void VDA5050Agv::startConnectionMonitor() {
-        if (imp_->is_monitoring_) {
-            return;
+
+        // 尝试获取全局监控权
+        std::unique_lock<std::mutex> global_lock(imp_->global_monitor_mutex);
+        if (imp_->global_monitoring) {
+            imp_->monitor_cv_.wait(global_lock, [this]() { 
+                return !imp_->global_monitoring || !imp_->is_monitoring_; 
+            });
         }
 
-        imp_->is_monitoring_ = true;
-        imp_->monitor_thread_ = std::thread([this]() {
-            while (imp_->is_monitoring_) {
-                {
-                    std::unique_lock<std::mutex> lock(imp_->monitor_mutex_);
-                    imp_->monitor_cv_.wait_for(lock, imp_->MONITOR_INTERVAL, 
-                        [this]() { return !imp_->is_monitoring_; });
-                    
-                    if (!imp_->is_monitoring_) {
-                        break;
+        if (!imp_->is_monitoring_) {
+            imp_->global_monitoring = true;
+            imp_->is_monitoring_ = true;
+            
+            imp_->monitor_thread_ = std::thread([this]() {
+                while (imp_->is_monitoring_) {
+                    {
+                        std::unique_lock<std::mutex> lock(imp_->monitor_mutex_);
+                        imp_->monitor_cv_.wait_for(lock, imp_->MONITOR_INTERVAL, 
+                            [this]() { return !imp_->is_monitoring_; });
+                        
+                        if (!imp_->is_monitoring_) {
+                            break;
+                        }
                     }
-                }
 
-                if (!imp_->mqtt_->isConnected()) {
-                    std::cerr << "检测到连接断开，尝试重连..." << std::endl;
-                    if (imp_->mqtt_->reconnect(imp_->MAX_RECONNECT_ATTEMPTS, 5)) {
-                        imp_->is_connected_ = true;
-                        subscribeToTopics();
-                        std::cerr << "重连成功" << std::endl;
-                    } else {
-                        throw std::runtime_error("重连失败，已达到最大重试次数" );
+                    if (!imp_->mqtt_->isConnected()) {
+                        std::cerr << "检测到连接断开，尝试重连..." << std::endl;
+                        if (imp_->mqtt_->reconnect(imp_->MAX_RECONNECT_ATTEMPTS, 5)) {
+                            imp_->is_connected_ = true;
+                            subscribeToTopics();
+                            std::cerr << "重连成功" << std::endl;
+                        } else {
+                            imp_->is_connected_ = false;
+                            throw std::runtime_error("重连失败，已达到最大重试次数" );
+                        }
                     }
                 }
-            }
-        });
+                
+                // 释放全局监控权
+                {
+                    std::lock_guard<std::mutex> lock(imp_->global_monitor_mutex);
+                    imp_->global_monitoring = false;
+                }
+                imp_->monitor_cv_.notify_all();
+            });
+        }
     }
 
     void VDA5050Agv::stopConnectionMonitor() {

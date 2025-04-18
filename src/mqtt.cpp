@@ -90,7 +90,7 @@ void MqttClient::connect() {
     }
 
     // 设置连接超时
-    mosquitto_connect_async(mosq_, broker_.c_str(), port_, 60);
+    mosquitto_connect_async(mosq_, broker_.c_str(), port_, 30);
 
     // 启动网络循环
     mosquitto_loop_start(mosq_);
@@ -186,7 +186,7 @@ bool MqttClient::reconnect(int maxAttempts, int retryIntervalSec) {
         retryIntervalSec_ = retryIntervalSec;
     }
 
-    currentReconnectAttempts_ = 0;
+    currentReconnectAttempts_ = 1;
     bool reconnected = false;
 
     while (currentReconnectAttempts_ < maxReconnectAttempts_ && !reconnected) {
