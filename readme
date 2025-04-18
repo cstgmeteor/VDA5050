@@ -1,0 +1,9 @@
+mosquitto_sub -h localhost -t "VDA/V2.0.0/H/1/state" -u admin -P admin -v
+
+sudo tail -f /var/log/mosquitto/mosquitto.log | grep -E "PUBLISH"
+
+mosquitto_sub -h localhost -t '$SYS/broker/subscriptions/count' -u admin -P admin
+
+sudo -E ./mrs_java
+
+sudo service mosquitto start
