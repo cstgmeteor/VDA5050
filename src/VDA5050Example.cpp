@@ -165,11 +165,11 @@ int main() {
                 }
                 case 4: {
                     if(stop){
-                        vda5050.cancelEStop();
+                        vda5050.goOn();
                         stop = false;
                     }
                     else{
-                        vda5050.eStop();
+                        vda5050.pause();
                         stop = true;
                     }
                     showStatus(vda5050);

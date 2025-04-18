@@ -17,7 +17,7 @@ namespace deviceagv {
     class VDA5050Agv : public DeviceAgv {
     public:
         // 控制接口
-        auto setPathInt(const std::vector<int>& path, bool append = false, int goal = -1)->void override;
+        auto setPathInt(const std::vector<int>& path, bool append = false)->void override;
         auto moveToStationInt(const int& name)->void override;
         auto appendPathInt(const std::vector<int>& path)->void override;
 
@@ -29,7 +29,7 @@ namespace deviceagv {
 
         auto init()->void override;
         auto update()->void override;
-        void reconnect();
+
 
         // 设置headerIds和orderId
         void setHeaderIds(const std::string& headerIds);

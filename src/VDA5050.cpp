@@ -38,8 +38,8 @@ struct VDA5050Agv::Imp {
     int tempCur;
     int currentActionId = -1;
     int currentGoalInt_ = -1;
+    int finialGoalInt_ = -1;
     // 实例状态标志
-    mutable bool state_flag = false;
     static int connect_num;
     static std::mutex connect_mutex;
     static bool is_connected_;
@@ -185,6 +185,7 @@ struct VDA5050Agv::Imp {
             }
             imp_->mqtt_->connect();
             imp_->mqtt_->setClientId(imp_->manufacturer_ + "_" + imp_->serialNumber_);
+            imp_->is_connected_ = true;
             return true;
         }
         catch (const std::exception& e) {
@@ -201,7 +202,8 @@ struct VDA5050Agv::Imp {
     }
 
     bool VDA5050Agv::isConnected() const {
-        if(imp_->mqtt_->isConnected() == false) return false;
+        //std::cout<<imp_->mqtt_->isConnected() <<std::endl;
+        //if(imp_->mqtt_->isConnected() == false) return false;
         return imp_->mqtt_ && imp_->is_connected_;
     }
 
@@ -250,9 +252,11 @@ struct VDA5050Agv::Imp {
                 while(imp_->currentActionId != -1) {
                     if (std::chrono::steady_clock::now() > timeout) {
                         std::cerr << "等待动作完成更新超时" << std::endl;
+                        
+                        std::cout<<imp_->currentState_.actionStates.back().actionId<<" "<< std::to_string(imp_->currentActionId)<<std::endl;
+                        std::cout<<imp_->currentState_.actionStates.back().actionStatus<<std::endl;
                         return false;
                     }
-                    std::this_thread::sleep_for(SLEEP_INTERVAL);
                 }
             return true;
         }
@@ -312,28 +316,10 @@ struct VDA5050Agv::Imp {
                 return;
             }
             std::cout<<"更新状态"<<std::endl;
-            std::lock_guard<std::mutex> lock(imp_->state_mutex);
-            imp_->state_flag = false;
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            if(!imp_->state_flag){
-                std::cout<<"请求更新"<<std::endl;
-                if (!sendInstantActions(createInstantActionsMessage("stateRequest"))) {
-                    std::cerr << "发送状态请求失败" << std::endl;
-                    return;
-                }
-                const auto timeout = std::chrono::steady_clock::now() + TIMEOUT_WAIT_STATION;
-                while(!imp_->state_flag) {
-                    if (std::chrono::steady_clock::now() > timeout) {
-                        std::cerr << "等待状态更新超时" << std::endl;
-                        return;
-                    }
-                    std::this_thread::sleep_for(SLEEP_INTERVAL);
-                }
+            if (!sendInstantActions(createInstantActionsMessage("stateRequest"))) {
+                std::cerr << "发送状态请求失败" << std::endl;
+                return;
             }
-            else{
-                std::cout<<"无需请求更新"<<std::endl;
-            }
-            std::cout<<"更新完成"<<std::endl;
             return;
         }
         catch (const std::exception& e) {
@@ -424,9 +410,6 @@ struct VDA5050Agv::Imp {
                 setErrMsg(errorMsg);
             }
             
-            if(!imp_->state_flag){
-                imp_->state_flag = true;
-            }
             setAgvMap(state.agvPosition.value().mapId);
 
             // 更新站点信息
@@ -455,11 +438,12 @@ struct VDA5050Agv::Imp {
                     else{
                         // 实际没有下一个点
                         setNextStationInt(-1);
-                        setFinialGoalInt(-1);
+                        //setFinialGoalInt(-1);
+                        imp_->finialGoalInt_ = -1;
                         //DeviceAgv::moveToStationInt(-1);
                         imp_->currentGoalInt_ = -1;
                         //setCurrentGoalInt(-1);
-                        DeviceAgv::setPathInt({});
+                        //DeviceAgv::setPathInt({});
                         restpath = {};
                     }
                 }
@@ -476,11 +460,12 @@ struct VDA5050Agv::Imp {
             else{
                 // 到达终点
                 setNextStationInt(-1);
-                setFinialGoalInt(-1);
+                //setFinialGoalInt(-1);
+                imp_->finialGoalInt_ = -1;
                 //DeviceAgv::moveToStationInt(-1);
                 imp_->currentGoalInt_ = -1;
                 //setCurrentGoalInt(-1);
-                DeviceAgv::setPathInt({});
+                //DeviceAgv::setPathInt({});
                 setRestPathInt({});
             }
 
@@ -508,15 +493,12 @@ struct VDA5050Agv::Imp {
             if(imp_->currentActionId != -1){
                 for(int i = state.actionStates.size()-1; i >= 0; --i){
                     if(state.actionStates[i].actionId == std::to_string(imp_->currentActionId) && 
-                       state.actionStates.back().actionStatus == "FINISHED"){
+                       (state.actionStates[i].actionStatus == "FINISHED" ||
+                       state.actionStates[i].actionStatus == "RUNNING")){
                         imp_->currentActionId = -1;
                         std::cout<<"动作完成"<<std::endl;
                     }
                 }   
-            }
-
-            if(!imp_->state_flag){
-                imp_->state_flag = true;
             }
         }
         catch (const std::exception& e) {
@@ -608,16 +590,19 @@ struct VDA5050Agv::Imp {
         return msg;
     }
 
-    auto VDA5050Agv::setPathInt(const std::vector<int>& nodepath, bool append, int goal) -> void
+    auto VDA5050Agv::setPathInt(const std::vector<int>& nodepath, bool append) -> void
     {
         try {
-            if (nodepath.empty()) {
-                throw std::invalid_argument("路径不能为空");
-            }
-            update();
             if (!append) {
+                update();
+                if(currentStationInt() == -1){
+                    throw std::runtime_error("当前不在站点上，设置路径失败");
+                }
+                if (nodepath.empty()) {
+                    throw std::invalid_argument("路径不能为空，设置路径失败");
+                }
                 if(nodepath[0] != currentStationInt()){
-                    throw std::runtime_error("起始点偏离了Agv真实位置");
+                    throw std::runtime_error("起始点不是当前站点：" + std::to_string(currentStationInt()) + "，设置路径失败");
                 }
             }
 
@@ -627,19 +612,8 @@ struct VDA5050Agv::Imp {
                 path.push_back(node);
             }
             
-            if(currentStationInt() == -1 || !restPathInt().empty()){
-                std::cout<<"已有路径或正在行驶，等待到达下一个站点更新路径"<<std::endl;
-                const auto timeout = std::chrono::steady_clock::now() + TIMEOUT_WAIT_STATION;
-                while (true) {
-                    if(currentStationInt() != -1){
-                        std::cout<<"到达站点"<<std::endl;
-                        break;
-                    }
-                    if (std::chrono::steady_clock::now() > timeout) {
-                        throw std::runtime_error("等待到达目标站点超时");
-                    }
-                    std::this_thread::sleep_for(SLEEP_INTERVAL);
-                }
+            if(!restPathInt().empty()){
+                std::cout<<"已有路径，更新路径"<<std::endl;
                 cancelMove();
             }
             DeviceAgv::setPathInt(nodepath);
@@ -647,9 +621,7 @@ struct VDA5050Agv::Imp {
             imp_->unreleaseNodes_.clear();
             imp_->unreleaseEdges_.clear();
             setFinialGoalInt(std::stoi(path.back().nodeId));
-            //DeviceAgv::moveToStationInt(goal);
-            imp_->currentGoalInt_ = goal;
-            //setCurrentGoalInt(goal);
+            imp_->finialGoalInt_ = std::stoi(path.back().nodeId);
 
             // 创建新的订单消息
             auto orderMsg = createOrderMessage(false);
@@ -670,11 +642,7 @@ struct VDA5050Agv::Imp {
                     orderMsg.edges.push_back(edge);
                 }
             }
-            if(append && goal >= 0){
-                moveToStationInt(goal);
-                std::cout<<"继续移动"<<goal<<std::endl;
-            }
-            else if (!sendOrder(orderMsg)) {
+            if (!sendOrder(orderMsg)) {
                 throw std::runtime_error("发送路径订单失败");
             }
         }
@@ -694,9 +662,6 @@ struct VDA5050Agv::Imp {
                     break;
                 }
             }
-
-            
-
             if (!found) {
                 throw std::runtime_error("目标节点 " + std::to_string(nodename) + " 不在剩余路径中");
             }
@@ -772,36 +737,37 @@ struct VDA5050Agv::Imp {
         }
     }
 
-    auto VDA5050Agv::cancelEStop() -> void {
+    auto VDA5050Agv::goOn() -> void {
         sendInstantActions(createInstantActionsMessage("stopPause", "NONE"));
     }
 
-    auto VDA5050Agv::eStop() -> void {
+    auto VDA5050Agv::pause() -> void {
         sendInstantActions(createInstantActionsMessage("startPause", "HARD"));
     }
 
     auto VDA5050Agv::cancelMove() -> void {
+        if(currentStationInt() == -1){
+            throw std::runtime_error("当前不在站点上，取消订单失败");
+        }
         imp_->unreleaseNodes_.clear();
         imp_->unreleaseEdges_.clear();
         setFinialGoalInt(-1);
         //setCurrentGoalInt(-1);
-        //DeviceAgv::moveToStationInt(-1);
+        DeviceAgv::moveToStationInt(-1);
         imp_->currentGoalInt_ = -1;
         setNextStationInt(-1);
         DeviceAgv::setPathInt({});
         setRestPathInt({});
         setErrMsg("");
-        eStop();
         sendInstantActions(createInstantActionsMessage("cancelOrder", "HARD"));
-        cancelEStop();
     }
 
-    auto VDA5050Agv::pause() -> void
+    auto VDA5050Agv::eStop() -> void
     {
         throw std::runtime_error("错误调用: VDA5050不支持");
     }
 
-    auto VDA5050Agv::goOn() -> void
+    auto VDA5050Agv::cancelEStop() -> void
     {
         throw std::runtime_error("错误调用: VDA5050不支持");
     }
@@ -814,37 +780,25 @@ struct VDA5050Agv::Imp {
 
     auto VDA5050Agv::appendPathInt(const std::vector<int>& path) -> void {
         try {
-            if (path.empty()) {
-                throw std::invalid_argument("追加路径不能为空");
-            }
             update();
-            if(path[0] != finialGoalInt()){
-                throw std::runtime_error("追加路径与原路径不连续");
+            if(currentStationInt() == -1){
+                throw std::runtime_error("当前不在站点上，追加路径失败");
+            }
+            if (path.empty()) {
+                throw std::invalid_argument("追加路径不能为空，追加路径失败");
+            }  
+            if(path[0] != imp_->finialGoalInt_){
+                throw std::runtime_error("追加路径与原路径不连续，追加路径失败");
             }
             auto oldpath = pathInt();
             oldpath.insert(oldpath.end(), path.begin()+1, path.end());
             DeviceAgv::setPathInt(oldpath);
 
             auto currentPath = restPathInt();
-            if(currentStationInt() != -1){
-                currentPath.insert(currentPath.begin(),currentStationInt());
-            }
+            currentPath.insert(currentPath.begin(),currentStationInt());
             currentPath.insert(currentPath.end(), path.begin() + 1, path.end());
 
-            if(currentStationInt() == -1){
-                std::cout<<"等待到达"<<nextStationInt()<<std::endl;
-                const auto timeout = std::chrono::steady_clock::now() + TIMEOUT_WAIT_STATION;
-                while (true) {
-                    if(currentStationInt() != -1){
-                        break;
-                    }
-                    if (std::chrono::steady_clock::now() > timeout) {
-                        throw std::runtime_error("等待到达目标节点超时");
-                    }
-                    std::this_thread::sleep_for(SLEEP_INTERVAL);
-                }
-            }
-            setPathInt(currentPath, true, imp_->currentGoalInt_);
+            setPathInt(currentPath, true);
             
         }
         catch (const std::exception& e) {
@@ -929,7 +883,7 @@ struct VDA5050Agv::Imp {
                         subscribeToTopics();
                         std::cerr << "重连成功" << std::endl;
                     } else {
-                        std::cerr << "重连失败，已达到最大重试次数" << std::endl;
+                        throw std::runtime_error("重连失败，已达到最大重试次数" );
                     }
                 }
             }
