@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cstring>
 #include <chrono>
+#include <thread>
 
 // 静态库初始化，确保只初始化一次
 static bool mosquitto_initialized = false;
@@ -114,7 +115,18 @@ void MqttClient::disconnect() {
 }
 
 bool MqttClient::isConnected() const {
-    return connected_;
+    if (!mosq_) {
+        return false;
+    }
+    
+    // 检查 socket 是否有效
+    int sock = mosquitto_socket(mosq_);
+    if (sock < 0) {
+        return false;
+    }
+    
+    // 检查连接状态
+    return connected_ && mosquitto_connect(mosq_, broker_.c_str(), port_, 60) == MOSQ_ERR_SUCCESS;
 }
 
 void MqttClient::processMessages(int timeout_ms) {
@@ -157,9 +169,49 @@ void MqttClient::setBrokerAddress(const std::string& broker, int port) {
     }
 }
 
-void MqttClient::reconnect() {
-    disconnect();
-    connect();
+void MqttClient::setReconnectParams(int maxAttempts, int retryIntervalSec) {
+    maxReconnectAttempts_ = maxAttempts;
+    retryIntervalSec_ = retryIntervalSec;
+}
+
+int MqttClient::getReconnectAttempts() const {
+    return currentReconnectAttempts_;
+}
+
+bool MqttClient::reconnect(int maxAttempts, int retryIntervalSec) {
+    if (maxAttempts > 0) {
+        maxReconnectAttempts_ = maxAttempts;
+    }
+    if (retryIntervalSec > 0) {
+        retryIntervalSec_ = retryIntervalSec;
+    }
+
+    currentReconnectAttempts_ = 0;
+    bool reconnected = false;
+
+    while (currentReconnectAttempts_ < maxReconnectAttempts_ && !reconnected) {
+        if (currentReconnectAttempts_ > 0) {
+            std::cerr << "MQTT重试连接 (第" << currentReconnectAttempts_ << "次)" << std::endl;
+            std::this_thread::sleep_for(std::chrono::seconds(retryIntervalSec_));
+        }
+
+        try {
+            disconnect();
+            connect();
+            reconnected = true;
+            std::cerr << "MQTT重连成功" << std::endl;
+        }
+        catch (const std::exception& e) {
+            std::cerr << "MQTT连接错误: " << e.what() << std::endl;
+            currentReconnectAttempts_++;
+        }
+    }
+
+    if (!reconnected) {
+        std::cerr << "MQTT重连失败，已达到最大重试次数" << std::endl;
+    }
+
+    return reconnected;
 }
 
 bool MqttClient::ensure_connected() {

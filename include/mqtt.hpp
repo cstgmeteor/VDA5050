@@ -53,8 +53,14 @@ public:
     // 设置代理地址和端口
     void setBrokerAddress(const std::string& broker, int port = 1883);
 
-    // 重新连接
-    void reconnect();
+    // 重新连接方法
+    bool reconnect(int maxAttempts = 3, int retryIntervalSec = 5);
+
+    // 获取当前重连尝试次数
+    int getReconnectAttempts() const;
+
+    // 设置重连参数
+    void setReconnectParams(int maxAttempts, int retryIntervalSec);
 
 private:
     // MQTT 优先级和保留标志
@@ -97,6 +103,11 @@ private:
     static void on_message_wrapper(struct mosquitto*, void*,
         const struct mosquitto_message*);
     void on_message(const struct mosquitto_message* msg);
+
+    // 重连相关参数
+    int maxReconnectAttempts_ = 3;
+    int retryIntervalSec_ = 5;
+    int currentReconnectAttempts_ = 0;
 };
 
 #endif // MQTT_CLIENT_HPP_

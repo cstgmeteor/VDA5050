@@ -5,6 +5,8 @@
 #include <thread>
 #include <mutex>
 #include <stdexcept>
+#include <atomic>
+#include <condition_variable>
 
 // 超时保护时间定义
 constexpr std::chrono::seconds TIMEOUT_WAIT_STATION = std::chrono::seconds(60);
@@ -35,6 +37,7 @@ struct VDA5050Agv::Imp {
     static std::string headerIds_;
     int tempCur;
     int currentActionId = -1;
+    int currentGoalInt_ = -1;
     // 实例状态标志
     mutable bool state_flag = false;
     static int connect_num;
@@ -73,6 +76,14 @@ struct VDA5050Agv::Imp {
         {10, 3.8, 0.77, 1.57, "HC"},
         {11, 3.8, 6.77, 1.57, "HC"}
     };
+
+    // 连接监控相关
+    std::atomic<bool> is_monitoring_{false};
+    std::thread monitor_thread_;
+    std::mutex monitor_mutex_;
+    std::condition_variable monitor_cv_;
+    const std::chrono::seconds MONITOR_INTERVAL{5};  // 监控间隔5秒
+    const int MAX_RECONNECT_ATTEMPTS{3};  // 最大重连次数
 };
     // 初始化静态成员
     int VDA5050Agv::Imp::connect_num = 0;
@@ -104,7 +115,9 @@ struct VDA5050Agv::Imp {
             imp_->tempCur = -1;
             setLastStationInt(-1);
             setFinialGoalInt(-1);
-            setCurrentGoalInt(-1);
+            DeviceAgv::moveToStationInt(-1);
+            imp_->currentGoalInt_ = -1;
+            //setCurrentGoalInt(-1);
             
             if (!username.empty() && !password.empty()) {
                 imp_->mqtt_->setCredentials(username, password);
@@ -117,6 +130,8 @@ struct VDA5050Agv::Imp {
 
     VDA5050Agv::~VDA5050Agv() {
         try {
+            stopConnectionMonitor();  // 停止监控线程
+            
             std::lock_guard<std::mutex> lock(imp_->connect_mutex);
             imp_->connect_num--;
             
@@ -142,13 +157,21 @@ struct VDA5050Agv::Imp {
             }
             // 尝试连接
             if (!connect()) {
-                imp_->connect_num--;
-                throw std::runtime_error("MQTT连接失败");
+                if (imp_->mqtt_->reconnect(imp_->MAX_RECONNECT_ATTEMPTS, 5)) {
+                    imp_->is_connected_ = true;
+                    subscribeToTopics();
+                    std::cerr << "重连成功" << std::endl;
+                } else {
+                    std::cerr << "重连失败，已达到最大重试次数" << std::endl;
+                    imp_->connect_num--;
+                    throw std::runtime_error("MQTT连接失败");
+                }
             }
             imp_->is_connected_ = true;
             subscribeToTopics();
             update();
-            return;
+            startConnectionMonitor();
+            return;    
         }
         catch (const std::exception& e) {
             throw std::runtime_error("初始化失败: " + std::string(e.what()));
@@ -178,6 +201,7 @@ struct VDA5050Agv::Imp {
     }
 
     bool VDA5050Agv::isConnected() const {
+        if(imp_->mqtt_->isConnected() == false) return false;
         return imp_->mqtt_ && imp_->is_connected_;
     }
 
@@ -266,9 +290,13 @@ struct VDA5050Agv::Imp {
 
         // 订阅连接主题
         std::string connectionTopic = "VDA/" + imp_->version_ + "/" + imp_->manufacturer_ + "/" + imp_->serialNumber_ + "/connection";
+        setConnectionCallback([this](const vda5050::ConnectionMessage& msg) {
+            this->handleConnectionState(msg.connectionState);
+        });
         imp_->mqtt_->subscribe(connectionTopic, 1, [this](const std::string& payload) {
             this->handleConnectionMessage(payload);
         });
+        
 
         // 订阅factsheet主题
         std::string factsheetTopic = "VDA/" + imp_->version_ + "/"  + imp_->manufacturer_ + "/" + imp_->serialNumber_ + "/factsheet";
@@ -335,11 +363,22 @@ struct VDA5050Agv::Imp {
         }
     }
 
+    void VDA5050Agv::handleConnectionState(const vda5050::ConnectionState& state) {
+        if (state == vda5050::ConnectionState::OFFLINE) {
+            //std::cerr << "收到断开连接消息" << std::endl;
+            imp_->is_connected_ = false;
+        } else if (state == vda5050::ConnectionState::ONLINE) {
+            //std::cerr << "收到连接成功消息" << std::endl;
+            imp_->is_connected_ = true;
+        }
+    }
+
     void VDA5050Agv::handleConnectionMessage(const std::string& payload) {
         try {
             auto connMsg = vda5050::MessageProcessor::parseConnectionMessage(payload);
             if (connMsg) {
                 imp_->connectionState_ = connMsg->connectionState;
+                
                 if (imp_->connectionCallback_) {
                     imp_->connectionCallback_(*connMsg);
                 }
@@ -417,7 +456,9 @@ struct VDA5050Agv::Imp {
                         // 实际没有下一个点
                         setNextStationInt(-1);
                         setFinialGoalInt(-1);
-                        setCurrentGoalInt(-1);
+                        //DeviceAgv::moveToStationInt(-1);
+                        imp_->currentGoalInt_ = -1;
+                        //setCurrentGoalInt(-1);
                         DeviceAgv::setPathInt({});
                         restpath = {};
                     }
@@ -436,7 +477,9 @@ struct VDA5050Agv::Imp {
                 // 到达终点
                 setNextStationInt(-1);
                 setFinialGoalInt(-1);
-                setCurrentGoalInt(-1);
+                //DeviceAgv::moveToStationInt(-1);
+                imp_->currentGoalInt_ = -1;
+                //setCurrentGoalInt(-1);
                 DeviceAgv::setPathInt({});
                 setRestPathInt({});
             }
@@ -455,8 +498,10 @@ struct VDA5050Agv::Imp {
             }
             
             // 到达目标站点
-            if(currentGoalInt() == currentStationInt()){
-                setCurrentGoalInt(-1);
+            if(imp_->currentGoalInt_ == currentStationInt()){
+                //DeviceAgv::moveToStationInt(-1);
+                imp_->currentGoalInt_ = -1;
+                //setCurrentGoalInt(-1);
             }
 
             // 检查动作完成状态
@@ -602,7 +647,9 @@ struct VDA5050Agv::Imp {
             imp_->unreleaseNodes_.clear();
             imp_->unreleaseEdges_.clear();
             setFinialGoalInt(std::stoi(path.back().nodeId));
-            setCurrentGoalInt(goal);
+            //DeviceAgv::moveToStationInt(goal);
+            imp_->currentGoalInt_ = goal;
+            //setCurrentGoalInt(goal);
 
             // 创建新的订单消息
             auto orderMsg = createOrderMessage(false);
@@ -647,6 +694,9 @@ struct VDA5050Agv::Imp {
                     break;
                 }
             }
+
+            
+
             if (!found) {
                 throw std::runtime_error("目标节点 " + std::to_string(nodename) + " 不在剩余路径中");
             }
@@ -656,7 +706,9 @@ struct VDA5050Agv::Imp {
             std::vector<vda5050::Node> newRestPath;
             std::vector<vda5050::Edge> newEdgesPath;
             std::string name = std::to_string(nodename);
-            setCurrentGoalInt(nodename);
+            DeviceAgv::moveToStationInt(nodename);
+            imp_->currentGoalInt_ = nodename;
+            //setCurrentGoalInt(nodename);
 
             try {
                 // 处理所有节点
@@ -732,12 +784,16 @@ struct VDA5050Agv::Imp {
         imp_->unreleaseNodes_.clear();
         imp_->unreleaseEdges_.clear();
         setFinialGoalInt(-1);
-        setCurrentGoalInt(-1);
+        //setCurrentGoalInt(-1);
+        //DeviceAgv::moveToStationInt(-1);
+        imp_->currentGoalInt_ = -1;
         setNextStationInt(-1);
         DeviceAgv::setPathInt({});
         setRestPathInt({});
         setErrMsg("");
+        eStop();
         sendInstantActions(createInstantActionsMessage("cancelOrder", "HARD"));
+        cancelEStop();
     }
 
     auto VDA5050Agv::pause() -> void
@@ -788,9 +844,7 @@ struct VDA5050Agv::Imp {
                     std::this_thread::sleep_for(SLEEP_INTERVAL);
                 }
             }
-            std::cout<<"追加路径"<<std::endl;
-            std::cout<<currentGoalInt()<<std::endl;
-            setPathInt(currentPath, true, currentGoalInt());
+            setPathInt(currentPath, true, imp_->currentGoalInt_);
             
         }
         catch (const std::exception& e) {
@@ -847,6 +901,52 @@ struct VDA5050Agv::Imp {
 
     void VDA5050Agv::setActionId(const std::string& actionId) {
         Imp::actionId_ = actionId;
+    }
+
+    // 添加监控线程的启动和停止函数
+    void VDA5050Agv::startConnectionMonitor() {
+        if (imp_->is_monitoring_) {
+            return;
+        }
+
+        imp_->is_monitoring_ = true;
+        imp_->monitor_thread_ = std::thread([this]() {
+            while (imp_->is_monitoring_) {
+                {
+                    std::unique_lock<std::mutex> lock(imp_->monitor_mutex_);
+                    imp_->monitor_cv_.wait_for(lock, imp_->MONITOR_INTERVAL, 
+                        [this]() { return !imp_->is_monitoring_; });
+                    
+                    if (!imp_->is_monitoring_) {
+                        break;
+                    }
+                }
+
+                if (!imp_->mqtt_->isConnected()) {
+                    std::cerr << "检测到连接断开，尝试重连..." << std::endl;
+                    if (imp_->mqtt_->reconnect(imp_->MAX_RECONNECT_ATTEMPTS, 5)) {
+                        imp_->is_connected_ = true;
+                        subscribeToTopics();
+                        std::cerr << "重连成功" << std::endl;
+                    } else {
+                        std::cerr << "重连失败，已达到最大重试次数" << std::endl;
+                    }
+                }
+            }
+        });
+    }
+
+    void VDA5050Agv::stopConnectionMonitor() {
+        if (!imp_->is_monitoring_) {
+            return;
+        }
+
+        imp_->is_monitoring_ = false;
+        imp_->monitor_cv_.notify_all();
+        
+        if (imp_->monitor_thread_.joinable()) {
+            imp_->monitor_thread_.join();
+        }
     }
 
 } // namespace vda5050 

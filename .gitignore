@@ -30,3 +30,7 @@
 *.exe
 *.out
 *.app
+
+build/
+device_agv.cpp
+device_agv.hpp

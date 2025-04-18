@@ -29,6 +29,7 @@ namespace deviceagv {
 
         auto init()->void override;
         auto update()->void override;
+        void reconnect();
 
         // 设置headerIds和orderId
         void setHeaderIds(const std::string& headerIds);
@@ -38,6 +39,9 @@ namespace deviceagv {
     private:
         struct Imp;
         std::unique_ptr<Imp> imp_;
+
+        // 连接状态处理
+        void handleConnectionState(const vda5050::ConnectionState& state);
 
         // 连接监控相关
         void startConnectionMonitor();
