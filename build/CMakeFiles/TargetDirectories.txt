@@ -1,0 +1,3 @@
+/home/kaanh/VDA5050/build/CMakeFiles/rebuild_cache.dir
+/home/kaanh/VDA5050/build/CMakeFiles/edit_cache.dir
+/home/kaanh/VDA5050/build/CMakeFiles/VDA5050_App.dir
