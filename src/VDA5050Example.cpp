@@ -76,7 +76,7 @@ int main() {
             // port = 1883;
             // serialNumber = "312532";
             // version = "v2.0.0";
-            broker = "192.168.60.112";
+            broker = "192.168.1.105";
             manufacturer = "HikRobot";
             port = 1883;
             serialNumber = "1";
@@ -136,7 +136,7 @@ int main() {
                     std::getline(std::cin, input);
                     path = parsePath(input);
                     vda5050.setPathInt(path);
-                    showStatus(vda5050);
+                    //showStatus(vda5050);
                     path_set = true;
                     break;
                 }
@@ -148,7 +148,7 @@ int main() {
                     std::cout << "请输入目标节点ID: ";
                     std::cin >> nodeId;
                     vda5050.moveToStationInt(nodeId);
-                    showStatus(vda5050);
+                    //showStatus(vda5050);
                     break;
                 }
                 case 3: {
@@ -160,7 +160,7 @@ int main() {
                     std::getline(std::cin, input);
                     path = parsePath(input);
                     vda5050.appendPathInt(path);
-                    showStatus(vda5050);
+                    //showStatus(vda5050);
                     break;
                 }
                 case 4: {
@@ -172,7 +172,7 @@ int main() {
                         vda5050.pause();
                         stop = true;
                     }
-                    showStatus(vda5050);
+                    //showStatus(vda5050);
                     
                     break;
                 }

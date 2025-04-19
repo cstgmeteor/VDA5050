@@ -73,9 +73,6 @@ namespace deviceagv {
         void disconnect();
         bool isConnected() const;
 
-        // 设置MQTT认证信息
-        void setMqttCredentials(const std::string& username, const std::string& password);
-
         // 发送消息接口
         bool sendOrder(const vda5050::OrderMessage& order);
         bool sendInstantActions(const vda5050::InstantActionsMessage& actions);
